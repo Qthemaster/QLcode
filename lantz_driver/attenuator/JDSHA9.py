@@ -3,6 +3,7 @@ from lantz.messagebased import MessageBasedDriver
 from lantz import Q_
 import functools
 from time import sleep
+from pint import DimensionalityError
 
 '''
 Author: Qian Lin 
@@ -11,7 +12,7 @@ Author: Qian Lin
 
 
 class JDSHA9(MessageBasedDriver):
-	"""This is the driver for the Keysight 36622A."""
+	"""This is the driver for the JDS HA9 ."""
 
 	"""For VISA resource types that correspond to a complete 488.2 protocol
 	(GPIB Instr, VXI/GPIB-VXI Instr, USB Instr, and TCPIP Instr), you
@@ -21,12 +22,12 @@ class JDSHA9(MessageBasedDriver):
 	"""
 
 	DEFAULTS = {
-		'ASRL': {'read_termination': '\n',
+		'COMMON': {'read_termination': '\n',
 		   'write_termination': '\n'
 		   },
-		'COMMON':{
-			'baud_rate': '1200'
-			}
+		# 'COMMON':{
+		# 	#'baud_rate': '1200'
+		# 	}
 		}
 	
 	RETURN_STATUS = {0: 'No error',
@@ -98,7 +99,7 @@ class JDSHA9(MessageBasedDriver):
 		self.write('*CLS')
 		print('Status cleared')
 
-	@Feat(values = tuple(range(256)))
+	@Feat(values = dict(enumerate(range(256))))
 	def standard_event_status_enable_register(self):
 		"""Reads the Standard Event Status Enable register. Reading the
 		register clears it.
@@ -152,7 +153,7 @@ class JDSHA9(MessageBasedDriver):
 		'''Reports on options installed or included with the attenuator.'''
 		return self.query('*OPT?')
 	
-	@Action(values = tuple(range(10)))
+	@Action(values = dict(enumerate(range(10))))
 	def recall(self,state):
 		'''Restores the attenuator to a state that has been stored in local memory.
 		Restoring to state 0 (*RCL 0) is equivalent to sending the *RST command. See
@@ -161,7 +162,7 @@ class JDSHA9(MessageBasedDriver):
 		'''
 		self.write('*RCL {}'.format(state))
 	
-	@Action(values = tuple(range(1,10)))
+	@Action(values = dict(enumerate(range(1,10))))
 	def save(self,state):
 		'''Stores the current state of the attenuator in local memory; as many as nine
 		states can be stored. For each state, the following settings are stored:
@@ -174,7 +175,7 @@ class JDSHA9(MessageBasedDriver):
 		Beam block state (ON or OFF)'''
 		self.write('*SAV {}'.format(state))
 
-	@Feat(values = tuple(range(256)))
+	@Feat(values = dict(enumerate(range(256))))
 	def service_request_enable_register(self):
 		'''Returns the contents of the service request enable register as an integer that,
 		when converted to a binary number, represents the bit values of the register'''
@@ -230,7 +231,7 @@ class JDSHA9(MessageBasedDriver):
 	@Feat(limits=(0,1))
 	def display_brightness(self):
 		'''Returns the brightness setting for the display, which is always 1'''
-		return self.query(':DISP:BRIG?')
+		return int(self.query(':DISP:BRIG?'))
 
 	@display_brightness.setter
 	def display_brightness(self,brig):
@@ -239,10 +240,10 @@ class JDSHA9(MessageBasedDriver):
 		only to maintain compatibility with the HP 8156A attenuator.'''
 		self.write(':DISP:BRIG {}'.format(brig))
 
-	@Feat(values={True: 1, False: 0})
+	@Feat(values={'ON': 1, 'OFF' :0 , 1:1, 0:0})
 	def display_status(self):
 		'''Returns the current state of the display., which is always 1'''
-		return self.query(':DISP:ENAB?')
+		return int(self.query(':DISP:ENAB?'))
 
 	@display_brightness.setter
 	def display_status(self,status):
@@ -255,15 +256,23 @@ class JDSHA9(MessageBasedDriver):
     #---------------------------------------------------------------------------------------
 	# I/O command
 
-	def valid_check(value, min_value, max_value, valid_strings):
+	def valid_check(value, min_value, max_value, valid_strings, unit = None):
 		if isinstance(value, (int, float)) and min_value <= value <= max_value:
 			return value
 		elif isinstance(value, str) and value.upper() in valid_strings:
 			return value.upper()  # Convert to uppercase to ensure consistency
+		elif isinstance(value, Q_) and unit:
+			try:
+				converted_value = value.to(unit).magnitude
+				if not min_value <= converted_value <= max_value:
+					raise ValueError(f'Invalid value: must be between {min_value} and {max_value}')
+				return converted_value
+			except DimensionalityError:
+				raise
 		else:
 			raise ValueError(f'Invalid value: must be between {min_value} and {max_value}, or {", ".join(valid_strings)}')
 
-	@Feat(procs=functools.partial(valid_check, min_value=0, max_value=100, valid_strings=['MIN', 'MAX', 'DEF']))
+	@Feat(procs=[(None,functools.partial(valid_check, min_value=0, max_value=100, valid_strings=['MIN', 'MAX', 'DEF'], unit = 'dB'))])
 	def attenuation(self):
 		"""Returns the current total attenuation in dB. The total attenuation is the total of
 		the actual attenuation and the offset:
@@ -286,18 +295,18 @@ class JDSHA9(MessageBasedDriver):
 		attenuation.'''
 		self.write(':INP:ATT {}'.format(value))
 
-	@Action(values = {0: 'DEF', 1: 'MIN', 2: 'MAX'})
+	@Action(values = {0: 'DEF', 1: 'MIN', 2: 'MAX', 'DEF': 'DEF', 'MIN': 'MIN', 'MAX': 'MAX'})
 	def get_attenuation_setting(self, value):
 		"""This query also accepts the parameters MIN, MAX, and DEF. The minimum,
 		maximum, or default value for the total attenuation at the current offset setting is
 		returned."""
 		return self.query(':INP:ATT? {}'.format(value))
 	
-	@Feat(values={'ON': True, 'OFF': False})
+	@Feat(values={'ON': 1, 'OFF' :0 , 1:1, 0:0})
 	def lc_mode(self):
 		'''Returns the current state of LCM mode, for example, returns 1 if LCM mode is
 		ON and 0 if LCM mode is OFF.'''
-		return self.query(':INP:LCM?')
+		return int(self.query(':INP:LCM?'))
 
 	@lc_mode.setter
 	def lc_mode(self, value):
@@ -313,7 +322,7 @@ class JDSHA9(MessageBasedDriver):
 		self.write(':INP:LCM {}'.format(value))
 
 
-	@Feat(procs=functools.partial(valid_check, min_value=-29.99, max_value=29.99, valid_strings=['MIN', 'MAX', 'DEF']))
+	@Feat(procs=[(None,functools.partial(valid_check, min_value=-29.99, max_value=29.99, valid_strings=['MIN', 'MAX', 'DEF'], unit = 'dB'))])
 	def offset(self):
 		'''Returns the current setting of the display offset. The query accepts the
 		parameters MIN, MAX, and DEF to return the minimum, maximum, or default
@@ -329,7 +338,7 @@ class JDSHA9(MessageBasedDriver):
 		offset is -29.99 dB, the maximum offset is 29.99 dB, and the default offset is 0.'''
 		self.write(':INP:OFFS {}'.format(value))
 
-	@Action(values = {0: 'DEF', 1: 'MIN', 2: 'MAX'})
+	@Action(values = {0: 'DEF', 1: 'MIN', 2: 'MAX', 'DEF': 'DEF', 'MIN': 'MIN', 'MAX': 'MAX'})
 	def get_offset_setting(self, value):
 		"""This query also accepts the parameters MIN, MAX, and DEF. The minimum,
 		maximum, or default value for the total attenuation at the current offset setting is
@@ -342,7 +351,7 @@ class JDSHA9(MessageBasedDriver):
 		Offsetnew = Atttotal - Offsetold = -Attact"""
 		self.write(':INP:OFFS:DISP')
 
-	@Feat(procs=functools.partial(valid_check, min_value=1200, max_value=1700, valid_strings=['MIN', 'MAX', 'DEF']))
+	@Feat(procs=[(None,functools.partial(valid_check, min_value=0.0000012, max_value=0.0000017, valid_strings=['MIN', 'MAX', 'DEF'], unit = 'm'))])
 	def wavelength(self):
 		'''Returns the current setting of the calibration wavelength in meters. This query
 		also accepts the parameters MIN, MAX, and DEF, returning the minimum,
@@ -362,20 +371,20 @@ class JDSHA9(MessageBasedDriver):
 		
 		self.write(':INP:WAV {}'.format(value))
 
-	@Action(values={0: 'DEF', 1: 'MIN', 2: 'MAX'})
+	@Action(values={0: 'DEF', 1: 'MIN', 2: 'MAX', 'DEF': 'DEF', 'MIN': 'MIN', 'MAX': 'MAX'})
 	def get_wavelength_setting(self, value):
 		'''Returns the current setting of the calibration wavelength in meters. This query
 		also accepts the parameters MIN, MAX, and DEF, returning the minimum,
 		maximum, or default value (respectively) for the calibration wavelength.'''
 		return self.query(':INP:WAV? {}'.format(value))
 		
-	@Feat(values={True: 'ON',False : 'OFF'})
+	@Feat(values={'ON': 1, 'OFF' :0 , 1:1, 0:0})
 	def ap_mode(self):
 		'''Returns the current absolute power mode state, for example, returns 1 if
 		absolute power mode is ON (the actual attenuation is set by throughput) and 0 if
 		absolute power mode is OFF (the actual attenuation is set by the total
 		attenuation).'''
-		return self.query(':OUTP:APM?')
+		return int(self.query(':OUTP:APM?'))
 
 	@ap_mode.setter
 	def ap_mode(self, value):
@@ -399,13 +408,13 @@ class JDSHA9(MessageBasedDriver):
 		:INP:OFFS:DISP'''
 		self.write(':OUTP:APM {}'.format(value))
 
-	@Feat(values={True: 'ON', False: 'OFF'})
+	@Feat(values={'ON': 1, 'OFF' :0 , 1:1, 0:0})
 	def driver(self):
 		"""Get or set the state of the 5 V output. 
 		A value of True or 'ON' turns the 5 V output on.
 		A value of False or 'OFF' turns the 5 V output off.
 		"""
-		self.query(':OUTP:DRIV?')
+		self.int(query(':OUTP:DRIV?'))
 		
 	@driver.setter
 	def driver(self, value):
@@ -413,7 +422,7 @@ class JDSHA9(MessageBasedDriver):
 		on. A boolean value of 0 or OFF turns the 5 V output off.'''
 		self.write(':OUTP:DRIV {}'.format(value))
 
-	@Feat(procs=functools.partial(valid_check, min_value=-29.99, max_value=29.99, valid_strings=['MIN', 'MAX', 'DEF']))
+	@Feat(procs=[(None,functools.partial(valid_check, min_value=-29.99, max_value=29.99, valid_strings=['MIN', 'MAX', 'DEF'], unit = 'dBm'))])
 	def power(self):
 		"""Returns the current through power of the attenuator in dBm. This query also
 		accepts the parameters MIN, MAX, and DEF. The minimum, maximum, or default
@@ -433,18 +442,18 @@ class JDSHA9(MessageBasedDriver):
 		default through power is the same as the maximum through power.'''
 		self.write(':OUTP:POW {}'.format(value))
 
-	@Action(values={0: 'DEF', 1: 'MIN', 2: 'MAX'})
+	@Action(values={0: 'DEF', 1: 'MIN', 2: 'MAX', 'DEF': 'DEF', 'MIN': 'MIN', 'MAX': 'MAX'})
 	def get_power_setting(self, value):
 		'''Returns the current setting of the calibration wavelength in meters. This query
 		also accepts the parameters MIN, MAX, and DEF, returning the minimum,
 		maximum, or default value (respectively) for the calibration wavelength.'''
 		return self.query(':OUTP:POW? {}'.format(value))
 
-	@Feat(values={True: 'ON', False: 'OFF'})
+	@Feat(values={'ON': 1, 'OFF' :0 , 1:1, 0:0})
 	def state(self):
 		'''Returns the state of the beam block: 1 if the beam block is out of the beam and
 		0 if the beam block is in the beam.'''
-		return self.query(':OUTP:STAT?')
+		return int(self.query(':OUTP:STAT?'))
 	
 	@state.setter
 	def state(self, value):
@@ -458,13 +467,13 @@ class JDSHA9(MessageBasedDriver):
 		"""
 		self.write(':OUTP:STAT {}'.format(value))
 
-	@Feat(values={'LAST': 'ON',True: 'ON', 'DIS': 'OFF', False: 'OFF'})
+	@Feat(values={'ON': 1, 'OFF' :0 , 1:1, 0:0})
 	def beam_block(self):
 		"""Returns the state of the beam block at power-on: 1 if the beam block is set to the
 		same state that it was in at power-off and 0 if the beam block state is in the
 		beam.
 		"""
-		return self.query(':OUTP:STAT:APOW?')
+		return int(self.query(':OUTP:STAT:APOW?'))
 	
 
 	@beam_block.setter
@@ -488,7 +497,7 @@ class JDSHA9(MessageBasedDriver):
 		attenuation.'''
 		return self.query(':STAT:OPER:COND?')
 	
-	@Feat()
+	@Feat(limits=(0,3276))
 	def operation_enable_register(self):
 		"""Get or set the bits in the operation enable register."""
 		return self.query(':STAT:OPER:ENAB?')
@@ -503,7 +512,7 @@ class JDSHA9(MessageBasedDriver):
 		return self.query(':STAT:OPER:EVENT?')
 
 
-	@Feat()
+	@Feat(limits=(0,3276))
 	def operation_negative_transition_register(self):
 		"""Get or set the bits of the operation negative transition register."""
 		return self.query(':STAT:OPER:NTR?')
@@ -513,7 +522,7 @@ class JDSHA9(MessageBasedDriver):
 	def operation_negative_transition_register(self, NRf):
 		self.write(':STAT:OPER:NTR {}'.format(NRf))  
 
-	@Feat()
+	@Feat(limits=(0,3276))
 	def operation_positive_transition_register(self):
 		"""Get or set the bits of the operation positive transition register."""
 		return self.query(':STAT:OPER:PTR?')
@@ -534,7 +543,7 @@ class JDSHA9(MessageBasedDriver):
 		attenuation.'''
 		return self.query(':STAT:QUES:COND?')
 	
-	@Feat()
+	@Feat(limits=(0,3276))
 	def questionable_enable_register(self):
 		"""Get or set the bits in the questionable enable register."""
 		return self.query(':STATus:OPERation:ENABle?')
@@ -549,7 +558,7 @@ class JDSHA9(MessageBasedDriver):
 		return self.query(':STAT:QUES:EVENT?')
 
 
-	@Feat()
+	@Feat(limits=(0,3276))
 	def questionable_negative_transition_register(self):
 		"""Get or set the bits of the questionable negative transition register."""
 		return self.query(':STAT:QUES:NTR?')
@@ -559,7 +568,7 @@ class JDSHA9(MessageBasedDriver):
 	def questionable_negative_transition_register(self, NRf):
 		self.write(':STAT:QUES:NTR {}'.format(NRf))  
 
-	@Feat()
+	@Feat(limits=(0,3276))
 	def questionable_positive_transition_register(self):
 		"""Get or set the bits of the questionable positive transition register."""
 		return self.query(':STAT:QUES:PTR?')
@@ -586,7 +595,7 @@ class JDSHA9(MessageBasedDriver):
 		0, No Error
 		See the Error Queue section for a list of error numbers and their associated
 		messages.'''
-		code = self.query(':SYST:ERR?')
+		code = int(self.query(':SYST:ERR?'))
 		if code != 0:
 			print("Error type {}: {} ".format(code, JDSHA9.RETURN_STATUS[code]))
 		return code
@@ -601,20 +610,20 @@ class JDSHA9(MessageBasedDriver):
 	#------------------------------------------------------------------------------------
 	#user command
 	
-	@Feat(values={True: 'ON', False: 'OFF'})
+	@Feat(values={'ON': 1, 'OFF' :0 , 1:1, 0:0})
 	def user_mode(self):
 		"""Get or set the user mode. 
 		A boolean value of 1 or ON turns user mode on and
 		the HA9 uses the current user slope instead of the factory-set slope.
 		A boolean value of 0 or OFF turns user mode off and the HA9 uses the factory-set slope.
 		"""
-		return self.query(':UCAL:USRM?')
+		return int(self.query(':UCAL:USRM?'))
 		
 	@user_mode.setter
 	def user_mode(self, value):
 		self.write(':UCAL:USRM {}'.format(value))
 
-	@Feat(procs=functools.partial(valid_check, min_value=0.5, max_value=2.0, valid_strings=['MIN', 'MAX', 'DEF']))
+	@Feat(procs=[(None,functools.partial(valid_check, min_value=0.5, max_value=2.0, valid_strings=['MIN', 'MAX', 'DEF']))])
 	def user_slope(self):
 		'''Returns the current user slope setting. This query also accepts the parameters
 		MIN, MAX and DEF, returning the corresponding minimum, maximum, or default
@@ -631,7 +640,7 @@ class JDSHA9(MessageBasedDriver):
 				
 		self.write(':UCAL:SLOP {}'.format(value))
 
-	@Action(values={0: 'DEF', 1: 'MIN', 2: 'MAX'})
+	@Action(values={0: 'DEF', 1: 'MIN', 2: 'MAX', 'DEF': 'DEF', 'MIN': 'MIN', 'MAX': 'MAX'})
 	def get_user_slope_setting(self, value):
 		'''Returns the current user slope setting. This query also accepts the parameters
 		MIN, MAX and DEF, returning the corresponding minimum, maximum, or default
@@ -666,4 +675,19 @@ if __name__ == '__main__':
 	Hz = Q_(1, 'Hz')
 
 	log_to_screen(DEBUG)
+
+	with JDSHA9("GPIB0::11::INSTR") as attn:
+		# osc.init()
+		print(attn.idn)
+		# osc.scale(3,0.1)
+		# osc.scale(4,0.05)
+		attn.state=1
+		print(attn.state)
+		# print(attn.attenuation)
+		attn.attenuation=4
+		print(attn.attenuation)
+		attn.wavelength=1.536e-6
+		print(attn.wavelength)
+		# attn.power=0
+		print(attn.beam_block) 
 	

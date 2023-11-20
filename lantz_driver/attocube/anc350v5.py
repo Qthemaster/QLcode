@@ -2,7 +2,7 @@ from lantz.foreign import LibraryDriver
 from lantz import Feat, DictFeat, Action, Q_
 
 import time
-from ctypes import c_uint, c_void_p, c_double, pointer, POINTER, c_int, c_bool, c_char_p, byref
+from ctypes import c_uint, c_void_p, c_double, pointer, POINTER, c_int, c_bool, c_char_p, byref, c_float, c_longdouble, addressof, cast
 
 "Author: Qian Lin"
 "qian.lin@balliol.ox.ac.uk"
@@ -110,11 +110,20 @@ class ANC350(LibraryDriver):
     
     @DictFeat(units='V', keys=(0, 1, 2))
     def DCvoltage(self, axis):
-        axis = int(axis)
         ret_volt = c_double()
-        self.lib.getDcVoltage(self.device, c_uint(axis), byref(ret_volt))
-        print(ret_volt)
-        return ret_volt.value
+        self.lib.getDcVoltage(self.device, c_uint(axis), pointer(ret_volt))
+        return float(ret_volt.value)
+
+        # DPTR = POINTER(c_double)
+        # axis = int(axis)
+        # ret_volt = c_double(0.0)
+        # ret_volt_ptr = addressof(ret_volt)
+
+        # self.lib.getDcVoltage(self.device, c_uint(axis), ret_volt_ptr)
+
+        # print(ret_volt_ptr)
+        # ret_volt_ptr = cast(ret_volt_ptr, DPTR)
+        # return ret_volt.value
         
     @DCvoltage.setter
     def DCvoltage(self, axis, DCvoltage):
@@ -197,7 +206,7 @@ class ANC350(LibraryDriver):
         status_flags = [c_uint() for _ in range(7)]
         status_flags_p = [pointer(flag) for flag in status_flags]
         self.lib.getAxisStatus(self.device, c_uint(axis), *status_flags_p)
-
+        #print(status_flags_p)
         ret = dict()
         for status_name, status_flag in zip(status_names, status_flags):
             ret[status_name] = True if status_flag.value else False
@@ -229,7 +238,7 @@ class ANC350(LibraryDriver):
     def multi_step(self, axis, steps):
         axis = int(axis)
         backward = c_bool(steps <= 0)
-        self.lib.startMultiStep(self.device, c_uint(axis), backward, c_uint(max(1, min(32767, abs(int(steps))))))
+        self.lib.startMultiStep(self.device, c_uint(axis), backward, c_uint(max(1, min(32767, int(abs(steps))))))
         return
 
     @Action(units=['', 'm'])
@@ -237,8 +246,7 @@ class ANC350(LibraryDriver):
         axis = int(axis)
         self.lib.setTargetPosition(self.device, c_uint(axis), c_double(pos))
         self.lib.startAutoMove(self.device, c_uint(axis), 1, 1)
-        time.sleep(20)
-        self.lib.startAutoMove(self.device, c_uint(axis), 0, 1)
+        
         return
 
 
